@@ -547,7 +547,7 @@ function splitSentences(text) {
 }
 
 function EpisodePlayer({ episode, onBack }) {
-  const cat   = EP_COLOR[episode.id] || EP_COLOR.world;
+  const cat   = EP_COLOR[episode.id] || { color: C.purple, bg: `${C.purple}18`, label: episode.topic, icon: "📻" };
   const sents = splitSentences(episode.script);
 
   const [isPlaying,   setIsPlaying]   = useState(false);
