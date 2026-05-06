@@ -903,6 +903,9 @@ function ShadowingPlayer({ material, onFinish }) {
   const sentRefs          = useRef({});
   const mediaRecorderRef  = useRef(null);
   const audioChunksRef    = useRef([]);
+  const recognitionRef    = useRef(null);
+  const transcriptRef     = useRef("");
+  const [transcript, setTranscript] = useState("");
   const sessionScore = useRef(Math.floor(65 + Math.random() * 30)).current;
   const totalMs      = material.sentences.reduce((a,s)=>a+s.durationMs,0);
 
@@ -922,33 +925,60 @@ function ShadowingPlayer({ material, onFinish }) {
 
   const stopAll = useCallback(()=>{ clearInterval(timerRef.current); window.speechSynthesis.cancel(); },[]);
 
+  const startRecognition = useCallback(() => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return;
+    const rec = new SR();
+    rec.lang = "en-US";
+    rec.continuous = true;
+    rec.interimResults = false;
+    transcriptRef.current = "";
+    rec.onresult = (e) => {
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        if (e.results[i].isFinal) transcriptRef.current += e.results[i][0].transcript + " ";
+      }
+    };
+    rec.onerror = () => {};
+    rec.start();
+    recognitionRef.current = rec;
+  }, []);
+
+  const stopRecognition = useCallback(() => {
+    try { recognitionRef.current?.stop(); } catch {}
+  }, []);
+
   const startRecording = useCallback(async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true },
+      });
       const recorder = new MediaRecorder(stream);
       audioChunksRef.current = [];
       recorder.ondataavailable = e => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
       recorder.onstop = () => {
         const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
         setAudioBlob(blob);
+        const t = transcriptRef.current.trim();
+        setTranscript(t);
         setSessionDone(true);
         stream.getTracks().forEach(t => t.stop());
       };
       recorder.start();
       mediaRecorderRef.current = recorder;
+      startRecognition();
     } catch {
-      // mic denied — still allow session to complete
       setSessionDone(true);
     }
-  }, []);
+  }, [startRecognition]);
 
   const stopRecording = useCallback(() => {
+    stopRecognition();
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
       mediaRecorderRef.current.stop();
     } else {
       setSessionDone(true);
     }
-  }, []);
+  }, [stopRecognition]);
 
   const getSentAt = useCallback((ms)=>{
     let acc=0;
@@ -1009,7 +1039,7 @@ function ShadowingPlayer({ material, onFinish }) {
       if(mode==="record") startRecording();
     }
   };
-  const reset=()=>{ stopAll(); setIsActive(false); setElapsedMs(0); setActiveSentIdx(0); setActiveWordIdx(-1); setSessionDone(false); setAudioBlob(null); containerRef.current?.scrollTo({top:0}); };
+  const reset=()=>{ stopAll(); setIsActive(false); setElapsedMs(0); setActiveSentIdx(0); setActiveWordIdx(-1); setSessionDone(false); setAudioBlob(null); setTranscript(""); containerRef.current?.scrollTo({top:0}); };
   const seek=(delta)=>{
     const next=Math.max(0,Math.min(totalMs,elapsedMs+delta));
     const {sentIdx,sentStartMs}=getSentAt(next);
@@ -1021,7 +1051,7 @@ function ShadowingPlayer({ material, onFinish }) {
   const fmt=ms=>{ const s=Math.floor(ms/1000); return `${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`; };
   const allDevPoints=material.sentences.flatMap(s=>s.words.filter(w=>w.devPoint));
 
-  if(sessionDone) return <SessionResult material={material} devPoints={allDevPoints} score={sessionScore} onRetry={reset} onFinish={onFinish} audioBlob={audioBlob}/>;
+  if(sessionDone) return <SessionResult material={material} devPoints={allDevPoints} score={sessionScore} onRetry={reset} onFinish={onFinish} audioBlob={audioBlob} transcript={transcript}/>;
 
   return (
     <div style={{display:"flex",flexDirection:"column",height:"100vh",background:C.bg,color:C.text,fontFamily:"'DM Sans','Segoe UI',sans-serif"}}>
@@ -1134,10 +1164,12 @@ function ShadowingPlayer({ material, onFinish }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // SESSION RESULT
 // ─────────────────────────────────────────────────────────────────────────────
-function SessionResult({ material, devPoints, score, onRetry, onFinish, audioBlob }) {
+function SessionResult({ material, devPoints, score, onRetry, onFinish, audioBlob, transcript }) {
   const [drillWord, setDrillWord] = useState(null);
   const [prevSession, setPrevSession] = useState(null);
   const [audioUrl, setAudioUrl] = useState(null);
+  const [analysis, setAnalysis] = useState(null);
+  const [analyzing, setAnalyzing] = useState(false);
   const grouped = {};
   devPoints.forEach(w=>{ const t=w.devPoint.type; if(!grouped[t])grouped[t]=[]; grouped[t].push(w); });
 
@@ -1152,6 +1184,22 @@ function SessionResult({ material, devPoints, score, onRetry, onFinish, audioBlo
     const url=URL.createObjectURL(audioBlob);
     setAudioUrl(url);
     return ()=>URL.revokeObjectURL(url);
+  },[audioBlob]);
+
+  useEffect(()=>{
+    if(!audioBlob) return; // only analyze when there's a recording
+    setAnalyzing(true);
+    const originalScript = material.sentences.map(s=>s.words.map(w=>w.w).join(" ")).join(" ");
+    const sentences = material.sentences.map(s=>s.words.map(w=>w.w).join(" "));
+    fetch("/api/analyze-speech",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({ originalScript, transcript, materialTitle:material.title, sentences }),
+    })
+      .then(r=>r.json())
+      .then(data=>setAnalysis(data))
+      .catch(()=>setAnalysis(null))
+      .finally(()=>setAnalyzing(false));
   },[audioBlob]);
 
   const diff  = prevSession ? score - prevSession.score : null;
@@ -1189,6 +1237,83 @@ function SessionResult({ material, devPoints, score, onRetry, onFinish, audioBlo
               <span style={{fontSize:12,color:C.muted}}>Listen and compare</span>
             </div>
             <audio controls src={audioUrl} style={{width:"100%",borderRadius:8,outline:"none"}}/>
+          </div>
+        )}
+
+        {audioBlob&&(
+          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:20,overflow:"hidden",marginBottom:16}}>
+            <div style={{padding:"16px 18px",borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",gap:8}}>
+              <span style={{fontSize:20}}>🤖</span>
+              <div style={{flex:1}}>
+                <div style={{fontWeight:800,fontSize:16}}>AI Analysis</div>
+                <div style={{fontSize:12,color:C.muted,marginTop:1}}>What you said well, what to improve</div>
+              </div>
+              {analysis&&<div style={{padding:"4px 12px",borderRadius:20,background:analysis.coveragePct>=70?"#4ADE8020":"#F8717120",color:analysis.coveragePct>=70?C.green:"#F87171",fontWeight:800,fontSize:14}}>{analysis.coveragePct}%</div>}
+            </div>
+
+            {analyzing&&(
+              <div style={{padding:"28px",textAlign:"center",color:C.muted,fontSize:13}}>
+                <div style={{marginBottom:8,fontSize:20}}>⏳</div>
+                Analyzing your recording…
+              </div>
+            )}
+
+            {!analyzing&&analysis&&(
+              <div style={{padding:"16px 18px"}}>
+                {/* Summary */}
+                <p style={{fontSize:14,color:C.text,lineHeight:1.7,marginBottom:16,padding:"12px 14px",background:C.surface2,borderRadius:10}}>{analysis.summary}</p>
+
+                {/* Strengths */}
+                {analysis.strengths?.length>0&&(
+                  <div style={{marginBottom:14}}>
+                    <div style={{fontSize:11,fontWeight:700,color:C.green,textTransform:"uppercase",letterSpacing:1,marginBottom:8}}>✓ What you did well</div>
+                    {analysis.strengths.map((s,i)=>(
+                      <div key={i} style={{display:"flex",gap:8,alignItems:"flex-start",marginBottom:6}}>
+                        <span style={{color:C.green,fontWeight:700,fontSize:14,flexShrink:0}}>•</span>
+                        <span style={{fontSize:13,color:C.text,lineHeight:1.5}}>{s}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Missed */}
+                {analysis.missed?.length>0&&(
+                  <div style={{marginBottom:14}}>
+                    <div style={{fontSize:11,fontWeight:700,color:"#F87171",textTransform:"uppercase",letterSpacing:1,marginBottom:8}}>✗ Unclear or skipped</div>
+                    {analysis.missed.map((s,i)=>(
+                      <div key={i} style={{display:"flex",gap:8,alignItems:"flex-start",marginBottom:6}}>
+                        <span style={{color:"#F87171",fontWeight:700,fontSize:14,flexShrink:0}}>•</span>
+                        <span style={{fontSize:13,color:C.text,lineHeight:1.5}}>{s}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Rhythm */}
+                {analysis.rhythm&&(
+                  <div style={{marginBottom:14,padding:"10px 14px",background:`${C.amber}12`,border:`1px solid ${C.amber}30`,borderRadius:10}}>
+                    <div style={{fontSize:11,fontWeight:700,color:C.amber,marginBottom:4}}>〜 RHYTHM & PACING</div>
+                    <p style={{fontSize:13,color:C.text,lineHeight:1.6,margin:0}}>{analysis.rhythm}</p>
+                  </div>
+                )}
+
+                {/* Improvement tips */}
+                {analysis.improvements?.length>0&&(
+                  <div>
+                    <div style={{fontSize:11,fontWeight:700,color:C.muted,textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>💡 Coaching tips</div>
+                    {analysis.improvements.map((tip,i)=>{
+                      const cat=DEV_TYPE[tip.type]||{color:C.accent,bg:`${C.accent}18`,icon:"💡",label:tip.type};
+                      return (
+                        <div key={i} style={{marginBottom:10,padding:"10px 14px",borderRadius:10,background:C.surface2,borderLeft:`3px solid ${cat.color}`}}>
+                          <div style={{fontSize:11,fontWeight:700,color:cat.color,marginBottom:4}}>{cat.icon} {cat.label}</div>
+                          <p style={{fontSize:13,color:C.text,lineHeight:1.6,margin:0}}>{tip.note}</p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 
