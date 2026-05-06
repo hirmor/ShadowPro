@@ -129,30 +129,45 @@ async function fetchEpisodeStories(feeds) {
     .slice(0, 8);
 }
 
+const TRANSITIONS = [
+  "Analysts say this situation is likely to develop further in the coming days.",
+  "Officials are closely monitoring the situation and have not yet issued a formal statement.",
+  "This comes amid broader concerns that experts say could have lasting implications.",
+  "Observers note that this marks a significant shift in the ongoing discussions.",
+  "The international community is watching closely as events continue to unfold.",
+  "This development follows weeks of mounting pressure from multiple sides.",
+  "Experts warn that the full impact may not be felt for some time.",
+  "Local authorities have urged calm while investigations remain ongoing.",
+];
+
 function buildTemplateScript(topic, stories, dateStr) {
   const lines = [];
   lines.push(`Good morning and welcome to your ${topic} briefing for ${dateStr}.`);
-  lines.push(`I'm your AI host. Today we're covering four stories from around the world. Let's get started.`);
+  lines.push(`I'm your AI host, bringing you the stories that matter most today. We have four reports for you this morning, so let's get straight into it.`);
   lines.push("");
 
   stories.slice(0, 4).forEach((story, i) => {
     const desc = story.description.replace(/\n/g, " ").slice(0, 400);
-    lines.push(`Story ${i + 1}: ${story.title}.`);
-    if (desc) {
-      lines.push(desc);
-      // Pad shorter descriptions with a transition sentence
-      if (desc.split(/\s+/).length < 40) {
-        lines.push(`This development continues to draw attention from analysts and policymakers who are watching the situation closely.`);
-      }
+    const words = desc.split(/\s+/).length;
+    lines.push(`Our ${["first", "second", "third", "fourth"][i]} story: ${story.title}.`);
+    if (desc) lines.push(desc);
+    // pad short descriptions to keep total close to 450 words
+    if (words < 35) {
+      lines.push(TRANSITIONS[i % TRANSITIONS.length]);
+      lines.push(TRANSITIONS[(i + 4) % TRANSITIONS.length]);
+    } else if (words < 60) {
+      lines.push(TRANSITIONS[i % TRANSITIONS.length]);
     }
     lines.push("");
   });
 
   lines.push(
     `That brings us to the end of today's ${topic} briefing for ${dateStr}. ` +
-    `Thank you for tuning in. Whether you're commuting, exercising, or just starting your morning, ` +
-    `we hope this briefing keeps you informed and helps you practice your English along the way. ` +
-    `Stay curious, stay connected, and we'll be back tomorrow morning with your next update.`
+    `Thank you for tuning in with us this morning. ` +
+    `Whether you are commuting, exercising, or enjoying a quiet start to your day, ` +
+    `we hope today's stories have given you a clearer picture of what is happening around the world. ` +
+    `Stay curious, keep practicing your English, and we will be back tomorrow morning with your next update. ` +
+    `Have a great day.`
   );
 
   return lines.join("\n");
