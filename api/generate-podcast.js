@@ -117,26 +117,33 @@ async function fetchEpisodeStories(feeds) {
       seen.add(item.title);
       return true;
     })
-    .slice(0, 5);
+    .slice(0, 8);
 }
 
 function buildTemplateScript(topic, stories, dateStr) {
   const lines = [];
-  lines.push(`Good morning. Welcome to your ${topic} briefing for ${dateStr}.`);
-  lines.push(`I'm your AI host, and here are the stories you need to know today.`);
+  lines.push(`Good morning and welcome to your ${topic} briefing for ${dateStr}.`);
+  lines.push(`I'm your AI host. Today we're covering four stories from around the world. Let's get started.`);
   lines.push("");
 
-  stories.slice(0, 3).forEach((story, i) => {
-    const desc = story.description.replace(/\n/g, " ").slice(0, 280);
+  stories.slice(0, 4).forEach((story, i) => {
+    const desc = story.description.replace(/\n/g, " ").slice(0, 400);
     lines.push(`Story ${i + 1}: ${story.title}.`);
-    if (desc) lines.push(desc);
+    if (desc) {
+      lines.push(desc);
+      // Pad shorter descriptions with a transition sentence
+      if (desc.split(/\s+/).length < 40) {
+        lines.push(`This development continues to draw attention from analysts and policymakers who are watching the situation closely.`);
+      }
+    }
     lines.push("");
   });
 
   lines.push(
-    `That's your ${topic} briefing for ${dateStr}. ` +
-      `Stay informed, keep practicing your English, and have a great day. ` +
-      `We'll be back tomorrow morning with your next briefing.`
+    `That brings us to the end of today's ${topic} briefing for ${dateStr}. ` +
+    `Thank you for tuning in. Whether you're commuting, exercising, or just starting your morning, ` +
+    `we hope this briefing keeps you informed and helps you practice your English along the way. ` +
+    `Stay curious, stay connected, and we'll be back tomorrow morning with your next update.`
   );
 
   return lines.join("\n");
@@ -144,20 +151,22 @@ function buildTemplateScript(topic, stories, dateStr) {
 
 async function buildClaudeScript(topic, stories, dateStr) {
   const storySummaries = stories
-    .slice(0, 4)
-    .map((s, i) => `${i + 1}. ${s.title}\n   ${s.description.slice(0, 220)}`)
+    .slice(0, 5)
+    .map((s, i) => `${i + 1}. ${s.title}\n   ${s.description.slice(0, 300)}`)
     .join("\n\n");
 
-  const prompt = `You are a professional radio broadcaster. Write a 3-minute English news podcast script for "${topic}" dated ${dateStr}.
+  const prompt = `You are a professional radio broadcaster. Write a full 3-minute English news podcast script for "${topic}" dated ${dateStr}.
 
 Requirements:
 - Natural spoken English only — NO music cues, NO [brackets], NO stage directions, NO asterisks
-- Target: exactly 400–430 words (≈ 3 minutes at 130 wpm)
+- Target: EXACTLY 450–480 words. Count carefully. This is strict.
 - Tone: warm, clear, professional; suitable for English learners at B2 level
-- Structure: brief greeting intro → 3 news stories (each ~1 minute) → short sign-off
+- Structure: greeting intro (30 words) → 4 news stories (~100 words each) → sign-off (30 words)
+- Each story: introduce the headline, explain the background, add one sentence of context or implication
 - Do NOT add section headings or numbers — just continuous natural speech
+- Do NOT truncate. Write all 4 stories in full.
 
-Today's stories (use all three as the basis):
+Today's stories:
 ${storySummaries}
 
 Begin the script directly with "Good morning."`;
@@ -171,7 +180,7 @@ Begin the script directly with "Good morning."`;
     },
     body: JSON.stringify({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 800,
+      max_tokens: 1200,
       messages: [{ role: "user", content: prompt }],
     }),
   });
@@ -207,7 +216,7 @@ async function generateEpisode(ep, dateStr) {
       pubDate: s.pubDate,
     })),
     wordCount,
-    durationMin: Math.round(wordCount / 130),
+    durationMin: Math.round(wordCount / 150),
   };
 }
 
