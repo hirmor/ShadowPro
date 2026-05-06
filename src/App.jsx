@@ -249,6 +249,10 @@ const EP_COLOR = {
   bbc:        { color:"#A78BFA", bg:"#A78BFA18", label:"BBC World News", icon:"🌍" },
   guardian:   { color:"#38BDF8", bg:"#38BDF818", label:"The Guardian",   icon:"📰" },
   japantimes: { color:"#FBBF24", bg:"#FBBF2418", label:"Japan Times",    icon:"🗾" },
+  // legacy IDs — kept for backward compat with old JSONbin data
+  world:      { color:"#A78BFA", bg:"#A78BFA18", label:"World News",     icon:"🌍" },
+  business:   { color:"#FBBF24", bg:"#FBBF2418", label:"Business",       icon:"📈" },
+  tech:       { color:"#38BDF8", bg:"#38BDF818", label:"Tech & Science",  icon:"🔬" },
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
