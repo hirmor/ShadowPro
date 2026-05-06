@@ -25,19 +25,18 @@ const RSS_EPISODES = [
     ],
   },
   {
-    id: "cnn",
-    topic: "CNN News",
+    id: "guardian",
+    topic: "The Guardian",
     feeds: [
-      "http://rss.cnn.com/rss/edition_world.rss",
-      "http://rss.cnn.com/rss/edition.rss",
+      "https://www.theguardian.com/world/rss",
+      "https://www.theguardian.com/us-news/rss",
     ],
   },
   {
-    id: "nikkei",
-    topic: "Nikkei Asia",
+    id: "japantimes",
+    topic: "Japan Times",
     feeds: [
-      "https://asia.nikkei.com/rss/feed/nar",
-      "https://asia.nikkei.com/rss/feed/finance",
+      "https://www.japantimes.co.jp/feed/",
     ],
   },
 ];
