@@ -214,6 +214,60 @@ Begin the script directly with "Good morning."`;
   return data.content?.[0]?.text?.trim() || null;
 }
 
+function splitSentences(text) {
+  return text.split(/(?<=[.!?])\s+/).map(s => s.trim()).filter(Boolean);
+}
+
+function buildTemplateDevPoints(sents) {
+  if (sents.length < 4) return [];
+  const mid = Math.floor(sents.length * 0.45);
+  return [
+    { sentIdx: 0, type: "rhythm", note: "Set a warm, welcoming pace for the intro. Don't rush — let 'Good morning' breathe with a slight pause before moving into the topic name." },
+    { sentIdx: mid, type: "stress", note: "This is a key news sentence. Find the most important noun or verb and stress it slightly longer and louder to signal what matters most to the listener." },
+    { sentIdx: sents.length - 1, type: "flow", note: "The sign-off should feel unhurried and warm. Let each phrase land before moving to the next, and drop your pitch gently at the very end to signal closure." },
+  ];
+}
+
+async function buildClaudeDevPoints(script) {
+  if (!process.env.ANTHROPIC_API_KEY) return null;
+  const sents = splitSentences(script);
+  if (sents.length < 4) return null;
+
+  const numbered = sents.map((s, i) => `${i}: ${s.slice(0, 90)}`).join("\n");
+  const prompt = `Given these podcast script sentences (0-indexed), choose 3 that are valuable for English pronunciation practice. For each, write a 30-45 word coaching tip focused on sentence-level stress, rhythm, pausing, or linking — not individual word pronunciation.
+
+Return ONLY a valid JSON array with no extra text:
+[{"sentIdx":N,"type":"stress","note":"coaching tip here"}]
+
+Types allowed: stress, rhythm, flow, linking
+
+Sentences:
+${numbered}`;
+
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": process.env.ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 500,
+        messages: [{ role: "user", content: prompt }],
+      }),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const text = data.content?.[0]?.text?.trim() || "";
+    const match = text.match(/\[[\s\S]*\]/);
+    return match ? JSON.parse(match[0]) : null;
+  } catch {
+    return null;
+  }
+}
+
 async function generateEpisode(ep, dateStr) {
   const stories = await fetchEpisodeStories(ep.feeds);
 
@@ -226,6 +280,11 @@ async function generateEpisode(ep, dateStr) {
     script = buildTemplateScript(ep.topic, stories, dateStr);
   }
 
+  const sents = splitSentences(script);
+  const devPoints =
+    (await buildClaudeDevPoints(script).catch(() => null)) ||
+    buildTemplateDevPoints(sents);
+
   const wordCount = script.split(/\s+/).length;
 
   return {
@@ -233,6 +292,7 @@ async function generateEpisode(ep, dateStr) {
     topic: ep.topic,
     title: `${ep.topic} Briefing`,
     script,
+    devPoints,
     stories: stories.slice(0, 3).map((s) => ({
       title: s.title,
       description: s.description.slice(0, 200),

@@ -553,9 +553,12 @@ function splitSentences(text) {
 function EpisodePlayer({ episode, onBack }) {
   const cat   = EP_COLOR[episode.id] || { color: C.purple, bg: `${C.purple}18`, label: episode.topic, icon: "📻" };
   const sents = splitSentences(episode.script);
+  const devMap = {};
+  (episode.devPoints || []).forEach(dp => { devMap[dp.sentIdx] = dp; });
 
   const [isPlaying,   setIsPlaying]   = useState(false);
   const [sentIdx,     setSentIdx]     = useState(-1);
+  const [devPopup,    setDevPopup]    = useState(null);
   const stopRef  = useRef(false);
   const scrollRef = useRef(null);
   const sentRefs  = useRef({});
@@ -629,33 +632,58 @@ function EpisodePlayer({ episode, onBack }) {
         )}
 
         {/* Script sentences */}
-        <div style={{fontSize:11,color:C.muted,fontWeight:700,textTransform:"uppercase",letterSpacing:1,marginBottom:14}}>Script</div>
+        <div style={{fontSize:11,color:C.muted,fontWeight:700,textTransform:"uppercase",letterSpacing:1,marginBottom:14,display:"flex",alignItems:"center",gap:8}}>
+          Script
+          {Object.keys(devMap).length>0&&<span style={{fontSize:10,background:"#DC262620",color:"#F87171",padding:"2px 8px",borderRadius:10,fontWeight:700}}>🔥 {Object.keys(devMap).length} Dev Points — tap highlighted sentences</span>}
+        </div>
         {sents.map((s, i) => {
           const isAct = i === sentIdx;
           const isPast = i < sentIdx;
+          const dp = devMap[i];
+          const hasDev = !!dp;
           return (
             <div key={i} ref={el => sentRefs.current[i] = el}
               style={{
                 marginBottom:14, padding:"10px 14px", borderRadius:10,
-                background:isAct?`${cat.color}18`:"transparent",
-                border:`1px solid ${isAct?cat.color:isAct?"transparent":"transparent"}`,
+                background:isAct?`${cat.color}18`:hasDev?"#7F1D1D18":"transparent",
+                border:`1px solid ${isAct?cat.color:hasDev?"#DC262640":"transparent"}`,
                 opacity:isPast?0.3:1,
                 transition:"all 0.3s",
-                cursor:"pointer",
+                cursor: hasDev ? "pointer" : isPlaying ? "default" : "pointer",
               }}
-              onClick={() => { if (!isPlaying) play(i); }}
+              onClick={() => {
+                if (hasDev) { setDevPopup(dp); return; }
+                if (!isPlaying) play(i);
+              }}
             >
               <p style={{
                 fontFamily:"'Noto Serif',Georgia,serif",
                 fontSize:17, lineHeight:1.85, fontWeight:400,
-                color:isAct?cat.color:C.text, margin:0,
+                color:isAct?cat.color:hasDev?"#FCA5A5":C.text, margin:0,
                 transition:"color 0.3s",
               }}>{s}</p>
+              {hasDev&&<div style={{marginTop:6,fontSize:11,color:"#F87171",fontWeight:700,display:"flex",alignItems:"center",gap:4}}>
+                <span>🔥</span><span>{DEV_TYPE[dp.type]?.label||dp.type}</span><span style={{color:C.muted}}>· tap for tip</span>
+              </div>}
             </div>
           );
         })}
         <div style={{height:160}}/>
       </div>
+
+      {devPopup&&(
+        <>
+          <div style={{position:"fixed",inset:0,zIndex:60}} onClick={()=>setDevPopup(null)}/>
+          <div style={{position:"fixed",bottom:200,left:"50%",transform:"translateX(-50%)",width:"min(380px,92vw)",background:C.surface2,border:"1px solid #7F1D1D60",borderRadius:16,padding:18,zIndex:70,boxShadow:"0 20px 60px rgba(0,0,0,0.7)"}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+              <span style={{background:"#DC2626",color:"#fff",padding:"2px 10px",borderRadius:20,fontSize:11,fontWeight:800}}>🔥 Dev Point</span>
+              {DEV_TYPE[devPopup.type]&&<span style={{background:DEV_TYPE[devPopup.type].bg,color:DEV_TYPE[devPopup.type].color,padding:"2px 8px",borderRadius:10,fontSize:11,fontWeight:700}}>{DEV_TYPE[devPopup.type].icon} {DEV_TYPE[devPopup.type].label}</span>}
+            </div>
+            <div style={{fontSize:13,color:C.text,lineHeight:1.7}}>{devPopup.note}</div>
+            <button onClick={()=>setDevPopup(null)} style={{marginTop:12,width:"100%",padding:"8px",borderRadius:8,background:"#7F1D1D40",border:"none",color:"#FCA5A5",fontWeight:700,fontSize:13,cursor:"pointer"}}>Close</button>
+          </div>
+        </>
+      )}
 
       {/* Player bar */}
       <div style={{background:C.bg,borderTop:`1px solid ${C.border}`,padding:"10px 20px 16px",paddingBottom:"calc(16px + env(safe-area-inset-bottom))"}}>
@@ -868,10 +896,13 @@ function ShadowingPlayer({ material, onFinish }) {
   const [activeWordIdx, setActiveWordIdx] = useState(-1);
   const [devPopup, setDevPopup]   = useState(null);
   const [sessionDone, setSessionDone] = useState(false);
+  const [audioBlob, setAudioBlob] = useState(null);
 
-  const timerRef     = useRef(null);
-  const containerRef = useRef(null);
-  const sentRefs     = useRef({});
+  const timerRef          = useRef(null);
+  const containerRef      = useRef(null);
+  const sentRefs          = useRef({});
+  const mediaRecorderRef  = useRef(null);
+  const audioChunksRef    = useRef([]);
   const sessionScore = useRef(Math.floor(65 + Math.random() * 30)).current;
   const totalMs      = material.sentences.reduce((a,s)=>a+s.durationMs,0);
 
@@ -890,6 +921,34 @@ function ShadowingPlayer({ material, onFinish }) {
   },[material]);
 
   const stopAll = useCallback(()=>{ clearInterval(timerRef.current); window.speechSynthesis.cancel(); },[]);
+
+  const startRecording = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      audioChunksRef.current = [];
+      recorder.ondataavailable = e => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
+      recorder.onstop = () => {
+        const blob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+        setAudioBlob(blob);
+        setSessionDone(true);
+        stream.getTracks().forEach(t => t.stop());
+      };
+      recorder.start();
+      mediaRecorderRef.current = recorder;
+    } catch {
+      // mic denied — still allow session to complete
+      setSessionDone(true);
+    }
+  }, []);
+
+  const stopRecording = useCallback(() => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.stop();
+    } else {
+      setSessionDone(true);
+    }
+  }, []);
 
   const getSentAt = useCallback((ms)=>{
     let acc=0;
@@ -940,10 +999,17 @@ function ShadowingPlayer({ material, onFinish }) {
   useEffect(()=>()=>stopAll(),[stopAll]);
 
   const toggle=()=>{
-    if(isActive){ stopAll(); setIsActive(false); }
-    else{ const {sentIdx,sentStartMs}=getSentAt(elapsedMs); setIsActive(true); speakFrom(sentIdx); startProgressTimer(sentStartMs); }
+    if(isActive){
+      stopAll(); setIsActive(false);
+      if(mode==="record") stopRecording();
+      else setSessionDone(true);
+    } else {
+      const {sentIdx,sentStartMs}=getSentAt(elapsedMs);
+      setIsActive(true); speakFrom(sentIdx); startProgressTimer(sentStartMs);
+      if(mode==="record") startRecording();
+    }
   };
-  const reset=()=>{ stopAll(); setIsActive(false); setElapsedMs(0); setActiveSentIdx(0); setActiveWordIdx(-1); setSessionDone(false); containerRef.current?.scrollTo({top:0}); };
+  const reset=()=>{ stopAll(); setIsActive(false); setElapsedMs(0); setActiveSentIdx(0); setActiveWordIdx(-1); setSessionDone(false); setAudioBlob(null); containerRef.current?.scrollTo({top:0}); };
   const seek=(delta)=>{
     const next=Math.max(0,Math.min(totalMs,elapsedMs+delta));
     const {sentIdx,sentStartMs}=getSentAt(next);
@@ -955,7 +1021,7 @@ function ShadowingPlayer({ material, onFinish }) {
   const fmt=ms=>{ const s=Math.floor(ms/1000); return `${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`; };
   const allDevPoints=material.sentences.flatMap(s=>s.words.filter(w=>w.devPoint));
 
-  if(sessionDone) return <SessionResult material={material} devPoints={allDevPoints} score={sessionScore} onRetry={reset} onFinish={onFinish}/>;
+  if(sessionDone) return <SessionResult material={material} devPoints={allDevPoints} score={sessionScore} onRetry={reset} onFinish={onFinish} audioBlob={audioBlob}/>;
 
   return (
     <div style={{display:"flex",flexDirection:"column",height:"100vh",background:C.bg,color:C.text,fontFamily:"'DM Sans','Segoe UI',sans-serif"}}>
@@ -1068,9 +1134,10 @@ function ShadowingPlayer({ material, onFinish }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // SESSION RESULT
 // ─────────────────────────────────────────────────────────────────────────────
-function SessionResult({ material, devPoints, score, onRetry, onFinish }) {
+function SessionResult({ material, devPoints, score, onRetry, onFinish, audioBlob }) {
   const [drillWord, setDrillWord] = useState(null);
   const [prevSession, setPrevSession] = useState(null);
+  const [audioUrl, setAudioUrl] = useState(null);
   const grouped = {};
   devPoints.forEach(w=>{ const t=w.devPoint.type; if(!grouped[t])grouped[t]=[]; grouped[t].push(w); });
 
@@ -1079,6 +1146,13 @@ function SessionResult({ material, devPoints, score, onRetry, onFinish }) {
     setPrevSession(prev);
     saveSession({ id:`sess_${Date.now()}_${Math.random().toString(36).slice(2,7)}`, materialId:material.id, materialTitle:material.title, speaker:material.speaker, date:new Date().toISOString(), score, devPointsCount:devPoints.length });
   },[]);
+
+  useEffect(()=>{
+    if(!audioBlob) return;
+    const url=URL.createObjectURL(audioBlob);
+    setAudioUrl(url);
+    return ()=>URL.revokeObjectURL(url);
+  },[audioBlob]);
 
   const diff  = prevSession ? score - prevSession.score : null;
   const label = score>=85?"Excellent! 🎉":score>=75?"Good Progress 👍":score>=65?"Keep Going 💪":"Practice More 📚";
@@ -1107,6 +1181,16 @@ function SessionResult({ material, devPoints, score, onRetry, onFinish }) {
             <div style={{fontSize:13,color:C.accent,marginTop:4}}>{devPoints.length} coaching points</div>
           </div>
         </div>
+
+        {audioUrl&&(
+          <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:20,padding:"16px 18px",marginBottom:16}}>
+            <div style={{fontWeight:800,fontSize:14,marginBottom:10,display:"flex",alignItems:"center",gap:8}}>
+              <span style={{background:"#DC262620",color:"#F87171",padding:"2px 10px",borderRadius:20,fontSize:12,fontWeight:800}}>🎙️ Your Recording</span>
+              <span style={{fontSize:12,color:C.muted}}>Listen and compare</span>
+            </div>
+            <audio controls src={audioUrl} style={{width:"100%",borderRadius:8,outline:"none"}}/>
+          </div>
+        )}
 
         <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:20,overflow:"hidden",marginBottom:16}}>
           <div style={{padding:"16px 18px",borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",gap:8}}>
