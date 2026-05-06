@@ -8,7 +8,7 @@
  *
  * Required env vars:
  *   CRON_SECRET      – any random string; protects manual triggers
- *   JSONBIN_BIN_ID   – JSONbin.io bin ID (create a free bin at jsonbin.io)
+ *   JSONBIN_BIN_ID   – JSONbin.io bin ID
  *   JSONBIN_API_KEY  – JSONbin.io master key
  *
  * Optional:
@@ -17,26 +17,27 @@
 
 const RSS_EPISODES = [
   {
-    id: "world",
-    topic: "World News",
+    id: "bbc",
+    topic: "BBC World News",
     feeds: [
       "https://feeds.bbci.co.uk/news/world/rss.xml",
       "https://feeds.bbci.co.uk/news/rss.xml",
     ],
   },
   {
-    id: "business",
-    topic: "Business & Economy",
+    id: "cnn",
+    topic: "CNN News",
     feeds: [
-      "https://feeds.bbci.co.uk/news/business/rss.xml",
+      "http://rss.cnn.com/rss/edition_world.rss",
+      "http://rss.cnn.com/rss/edition.rss",
     ],
   },
   {
-    id: "tech",
-    topic: "Tech & Science",
+    id: "nikkei",
+    topic: "Nikkei Asia",
     feeds: [
-      "https://feeds.bbci.co.uk/news/technology/rss.xml",
-      "https://feeds.bbci.co.uk/news/science_and_environment/rss.xml",
+      "https://asia.nikkei.com/rss/feed/nar",
+      "https://asia.nikkei.com/rss/feed/finance",
     ],
   },
 ];
@@ -54,26 +55,61 @@ function stripHtml(html = "") {
     .trim();
 }
 
+function extractCDATA(str = "") {
+  const m = str.match(/<!\[CDATA\[([\s\S]*?)\]\]>/);
+  return m ? m[1].trim() : str.trim();
+}
+
+function parseRSS(xml) {
+  const items = [];
+  const itemRegex = /<item[\s>]([\s\S]*?)<\/item>/g;
+  let match;
+  while ((match = itemRegex.exec(xml)) !== null) {
+    const block = match[1];
+
+    const rawTitle = block.match(/<title[^>]*>([\s\S]*?)<\/title>/)?.[1] ?? "";
+    const rawDesc =
+      block.match(/<description[^>]*>([\s\S]*?)<\/description>/)?.[1] ??
+      block.match(/<content:encoded[^>]*>([\s\S]*?)<\/content:encoded>/)?.[1] ??
+      "";
+    const rawLink =
+      block.match(/<link>([\s\S]*?)<\/link>/)?.[1] ??
+      block.match(/<link[^>]+href="([^"]+)"/)?.[1] ??
+      "";
+    const pubDate = block.match(/<pubDate>([\s\S]*?)<\/pubDate>/)?.[1]?.trim() ?? "";
+
+    const title = stripHtml(extractCDATA(rawTitle));
+    const description = stripHtml(extractCDATA(rawDesc)).slice(0, 300);
+    const link = extractCDATA(rawLink).trim();
+
+    if (title) items.push({ title, description, link, pubDate });
+  }
+  return items;
+}
+
 async function fetchFeed(url) {
-  const res = await fetch(
-    `https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(url)}&count=6`
-  );
-  if (!res.ok) return [];
-  const data = await res.json();
-  return data.status === "ok" ? data.items : [];
+  try {
+    const res = await fetch(url, {
+      headers: {
+        "User-Agent": "ShadowPro-PodcastBot/1.0",
+        Accept: "application/rss+xml, application/xml, text/xml",
+      },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return [];
+    const xml = await res.text();
+    return parseRSS(xml);
+  } catch {
+    return [];
+  }
 }
 
 async function fetchEpisodeStories(feeds) {
   const allItems = [];
   for (const url of feeds) {
-    try {
-      const items = await fetchFeed(url);
-      allItems.push(...items);
-    } catch {
-      // skip failed feeds
-    }
+    const items = await fetchFeed(url);
+    allItems.push(...items);
   }
-  // deduplicate by title, take top 5 by recency
   const seen = new Set();
   return allItems
     .filter((item) => {
@@ -84,21 +120,14 @@ async function fetchEpisodeStories(feeds) {
     .slice(0, 5);
 }
 
-// Template-based script (~400 words, ~3 min at 130 wpm)
 function buildTemplateScript(topic, stories, dateStr) {
   const lines = [];
-
   lines.push(`Good morning. Welcome to your ${topic} briefing for ${dateStr}.`);
-  lines.push(
-    `I'm your AI host, and here are the three stories you need to know today.`
-  );
+  lines.push(`I'm your AI host, and here are the stories you need to know today.`);
   lines.push("");
 
   stories.slice(0, 3).forEach((story, i) => {
-    const desc = stripHtml(story.description || story.content || "")
-      .replace(/\n/g, " ")
-      .slice(0, 280);
-
+    const desc = story.description.replace(/\n/g, " ").slice(0, 280);
     lines.push(`Story ${i + 1}: ${story.title}.`);
     if (desc) lines.push(desc);
     lines.push("");
@@ -106,24 +135,20 @@ function buildTemplateScript(topic, stories, dateStr) {
 
   lines.push(
     `That's your ${topic} briefing for ${dateStr}. ` +
-    `Stay informed, keep practicing your English, and have a great day. ` +
-    `We'll be back tomorrow morning with your next briefing.`
+      `Stay informed, keep practicing your English, and have a great day. ` +
+      `We'll be back tomorrow morning with your next briefing.`
   );
 
   return lines.join("\n");
 }
 
-// Claude-powered script (natural, broadcast-quality)
 async function buildClaudeScript(topic, stories, dateStr) {
   const storySummaries = stories
     .slice(0, 4)
-    .map(
-      (s, i) =>
-        `${i + 1}. ${s.title}\n   ${stripHtml(s.description || "").slice(0, 220)}`
-    )
+    .map((s, i) => `${i + 1}. ${s.title}\n   ${s.description.slice(0, 220)}`)
     .join("\n\n");
 
-  const prompt = `You are a professional radio broadcaster. Write a 3-minute English news podcast script for the topic "${topic}" dated ${dateStr}.
+  const prompt = `You are a professional radio broadcaster. Write a 3-minute English news podcast script for "${topic}" dated ${dateStr}.
 
 Requirements:
 - Natural spoken English only — NO music cues, NO [brackets], NO stage directions, NO asterisks
@@ -177,7 +202,7 @@ async function generateEpisode(ep, dateStr) {
     script,
     stories: stories.slice(0, 3).map((s) => ({
       title: s.title,
-      description: stripHtml(s.description || "").slice(0, 200),
+      description: s.description.slice(0, 200),
       link: s.link,
       pubDate: s.pubDate,
     })),
@@ -200,12 +225,10 @@ async function savePodcast(payload) {
 }
 
 export default async function handler(req, res) {
-  // Only POST allowed
   if (req.method !== "POST" && req.method !== "GET") {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  // Auth: Vercel Cron sends x-vercel-cron header; manual calls need Bearer secret
   const isVercelCron = req.headers["x-vercel-cron"] === "1";
   const secret = process.env.CRON_SECRET;
   const hasSecret =
@@ -239,11 +262,20 @@ export default async function handler(req, res) {
 
     await savePodcast(payload);
     console.log(`[podcast] Done. ${episodes.length} episodes saved.`);
+    console.log(
+      episodes.map((e) => `  ${e.id}: ${e.wordCount} words, ${e.stories.length} stories`)
+    );
 
     return res.status(200).json({
       success: true,
       episodeCount: episodes.length,
       ai: !!process.env.ANTHROPIC_API_KEY,
+      episodes: episodes.map((e) => ({
+        id: e.id,
+        topic: e.topic,
+        wordCount: e.wordCount,
+        storiesFound: e.stories.length,
+      })),
     });
   } catch (err) {
     console.error("[podcast] Generation failed:", err);

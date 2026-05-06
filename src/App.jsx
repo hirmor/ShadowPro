@@ -246,9 +246,9 @@ const DEV_TYPE = {
 
 // Episode topic colours
 const EP_COLOR = {
-  world:    { color:"#A78BFA", bg:"#A78BFA18", label:"World News",        icon:"🌍" },
-  business: { color:"#FBBF24", bg:"#FBBF2418", label:"Business & Economy", icon:"📈" },
-  tech:     { color:"#38BDF8", bg:"#38BDF818", label:"Tech & Science",     icon:"🔬" },
+  bbc:     { color:"#A78BFA", bg:"#A78BFA18", label:"BBC World News", icon:"🌍" },
+  cnn:     { color:"#E53E3E", bg:"#E53E3E18", label:"CNN News",       icon:"📺" },
+  nikkei:  { color:"#FBBF24", bg:"#FBBF2418", label:"Nikkei Asia",   icon:"📰" },
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
