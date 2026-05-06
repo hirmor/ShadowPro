@@ -87,18 +87,28 @@ function parseRSS(xml) {
 }
 
 async function fetchFeed(url) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
   try {
     const res = await fetch(url, {
       headers: {
         "User-Agent": "ShadowPro-PodcastBot/1.0",
         Accept: "application/rss+xml, application/xml, text/xml",
       },
-      signal: AbortSignal.timeout(8000),
+      signal: controller.signal,
     });
-    if (!res.ok) return [];
+    clearTimeout(timer);
+    if (!res.ok) {
+      console.warn(`[rss] ${url} → HTTP ${res.status}`);
+      return [];
+    }
     const xml = await res.text();
-    return parseRSS(xml);
-  } catch {
+    const items = parseRSS(xml);
+    console.log(`[rss] ${url} → ${items.length} items`);
+    return items;
+  } catch (err) {
+    clearTimeout(timer);
+    console.warn(`[rss] ${url} → ${err.message}`);
     return [];
   }
 }
